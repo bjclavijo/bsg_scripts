@@ -84,6 +84,10 @@ class LRMatchesPlotter(object):
             if [x for x in frm if abs(x.node)==abs(node)]:
                 self.plot_matches(frm,signed_nodes,light_highlight_nodes=highlight_all,highlight_nodes=[abs(node)])
 
+    def plot_all_matches_for_nodes(self,nodes,signed_nodes=False,highlight_all=[]):
+        for frm in self.lorm.filtered_read_mappings:
+            if all(n in [abs(x.node) for x in frm] for n in nodes):
+                self.plot_matches(frm,signed_nodes,light_highlight_nodes=highlight_all,highlight_nodes=[abs(x) for x in nodes])
 
 
 
