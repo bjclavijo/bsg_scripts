@@ -1,33 +1,98 @@
 #!/usr/bin/env python3
 import pybsg as bsg
+import pylab
 
-def get_line_lenght(ldg,line):
-    totalbp=len(ws.sg.nodes[abs(line[0])].sequence)
-    for i in range(len(line)-1):
-        totalbp+=[x.dist for x in ldg.get_fw_links(line[i]) if x.dest==line[i+1]][0]
-        totalbp+=len(ws.sg.nodes[abs(line[i+1])].sequence)
-    return totalbp
+class LDGStats(object):
+    """docstring for LDGStats."""
+    def __init__(self, _ldg):
+        self.ldg = _ldg
 
-def print_line_contiguity_stats(ldg):
-    lines=ldg.get_all_lines(2)
-    #lines_lenghts=[sum([len(ws.sg.nodes[abs(n)].sequence) for n in x]) for x in lines]
-    lines_lenghts=[get_line_lenght(ldg,x) for x in lines]
-    lines_lenghts.sort(reverse=True)
-    total=sum(lines_lenghts)
-    print("Total bp in lines: %d" % total)
-    t=0
-    checkpoints=[0,10,20,30,40,50,60,80,90,100,200]
-    ncp=0
-    l=0
-    for c in lines_lenghts:
-        t+=c
-        l+=1
-        while t>=total*checkpoints[ncp]/100:
-            print("N%d: %dbp, contig #%d"%(checkpoints[ncp],c,l))
-            ncp+=1
+    def get_line_lenght(self,line):
+        totalbp=len(self.ldg.sg.nodes[abs(line[0])].sequence)
+        for i in range(len(line)-1):
+            totalbp+=[x.dist for x in self.ldg.get_fw_links(line[i]) if x.dest==line[i+1]][0]
+            totalbp+=len(self.ldg.sg.nodes[abs(line[i+1])].sequence)
+        return totalbp
+
+    def print_line_contiguity_stats(self,_min_nodes=2):
+        lines=self.ldg.get_all_lines(_min_nodes)
+        lines_lenghts=[self.get_line_lenght(x) for x in lines]
+        lines_lenghts.sort(reverse=True)
+        total=sum(lines_lenghts)
+        print("Total bp in lines: %d" % total)
+        t=0
+        checkpoints=[0,10,20,30,40,50,60,80,90,100,200]
+        ncp=0
+        l=0
+        for c in lines_lenghts:
+            t+=c
+            l+=1
+            while t>=total*checkpoints[ncp]/100:
+                print("N%d: %dbp, contig #%d"%(checkpoints[ncp],c,l))
+                ncp+=1
+
+class LRMatchesPlotter(object):
+    """docstring for LRMatchesPlotter."""
+    def __init__(self, lorm, fs):
+        self.lorm=lorm
+        self.fs=fs
+
+    def plot(self,read_id,signed_nodes=False,highlight_nodes=[]):
+        self.plot_matches(self.lorm.filtered_read_mappings[read_id],signed_nodes,highlight_nodes)
+
+    def plot_matches(self,matches,signed_nodes=False, highlight_nodes=[],light_highlight_nodes=[]):
+        pylab.figure(figsize=self.fs)
+        last_y=0
+        nodes=[]
+        if not matches: return
+        tickpos=[]
+        ticklabel=[]
+        for m in matches:
+            if abs(m.node) not in [abs(x) for x in nodes]:
+                if signed_nodes: nodes.append(m.node)
+                else: nodes.append(abs(m.node))
+        read_last_pos=max([x.qEnd for x in matches])
+        for n in nodes:
+            nlength=len(self.lorm.getSequenceGraph().nodes[abs(n)].sequence)
+            tickpos.append(last_y+nlength/2)
+            ticklabel.append("%d (%d bp)"% (n,nlength))
+            if abs(n) in highlight_nodes:
+                pylab.axhspan(last_y, last_y+nlength, facecolor='y', alpha=0.25)
+            if abs(n) in light_highlight_nodes:
+                pylab.axhspan(last_y, last_y+nlength, facecolor='y', alpha=0.15)
+            for m in matches:
+                if abs(m.node)==abs(n):
+                    xpos=(m.qStart,m.qEnd)
+                    if m.node==n:
+                        ypos=(m.nStart+last_y,m.nEnd+last_y)
+                    else:
+                        ypos=(nlength-m.nStart-15+last_y,nlength-m.nEnd-15+last_y)
+                    pylab.plot(xpos,ypos,".-")
+
+            last_y+=nlength
+            pylab.plot([0,read_last_pos],[last_y,last_y],"k:")
+        pylab.title('Filtered matches for read %d' % matches[0].read_id)
+        pylab.xlabel('Read position')
+        pylab.ylabel('Node')
+        pylab.xlim(left=0,right=read_last_pos)
+        pylab.ylim(bottom=0,top=last_y)
+        pylab.yticks(tickpos, ticklabel)
+        pylab.show()
+
+    def plot_all_matches_for_node(self,node,signed_nodes=False,highlight_all=[]):
+        for frm in self.lorm.filtered_read_mappings:
+            if [x for x in frm if abs(x.node)==abs(node)]:
+                self.plot_matches(frm,signed_nodes,light_highlight_nodes=highlight_all,highlight_nodes=[abs(node)])
+
+
+
+
+
+
+
 
 from graphviz import Graph
-def plot_nodes_around(_nodes,ldg,radius,min_links):    
+def plot_nodes_around(_nodes,ldg,radius,min_links):
     link_edges=[]
     initialnodes=[abs(x) for x in _nodes]
     s = Graph('structs', node_attr={'shape': 'plaintext'},engine='neato')
@@ -148,7 +213,7 @@ def describe_fw(node,min_links=3):
     for x in mldg.fw_neighbours_by_distance(node,min_links):
         print(x,end="")
         if u.selected_nodes[abs(x[1])]:  print(' ANCHOR',end='')
-        for i in range(len(lines)): 
+        for i in range(len(lines)):
             if abs(x[1]) in [abs(y) for y in lines[i]]:
                 print(' found in line %d' % (i),end='')
         print()
@@ -244,7 +309,7 @@ def get_all_reads_between_as(ns,lorm,u,lines,do_print=True):
     read_ids=[]
     for i in lorm.reads_in_node[abs(ns[0])]:
         if not all(i in lorm.reads_in_node[abs(x)] for x in ns): continue
-        
+
         nodes=[x.node for x in lorm.filtered_read_mappings[i]]
         if all(x in nodes for x in ns): read_ids.append(i)
         elif all(-x in nodes for x in ns): read_ids.append(-i)
