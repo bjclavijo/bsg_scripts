@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 import pybsg as bsg
 import pylab
+from graphviz import Graph
+import numpy as np
+from statistics import mean
 
 class LDGStats(object):
     """docstring for LDGStats."""
@@ -37,6 +40,20 @@ class LRMatchesPlotter(object):
         self.lorm=lorm
         self.fs=fs
 
+    def plot_unfiltered(self,read_id,signed_nodes=False,highlight_nodes=[]):
+        self.plot_matches([x for x in self.lorm.mappings if x.read_id==read_id],signed_nodes,highlight_nodes)
+
+    def plot_unfiltered_in_node(self,node_id,signed_nodes=False,highlight_nodes=[]):
+        reads=[]
+        for x in self.lorm.mappings:
+            if abs(x.node)==node_id and ((not reads) or x.read_id != reads[-1]):
+                reads.append(x.read_id)
+        for read_id in reads:
+            matches=[x for x in self.lorm.mappings if x.read_id==read_id]
+            if len(matches)>50: continue
+            self.plot_matches(matches,signed_nodes,highlight_nodes=[node_id])
+
+
     def plot(self,read_id,signed_nodes=False,highlight_nodes=[]):
         self.plot_matches(self.lorm.filtered_read_mappings[read_id],signed_nodes,highlight_nodes)
 
@@ -67,7 +84,9 @@ class LRMatchesPlotter(object):
                         ypos=(m.nStart+last_y,m.nEnd+last_y)
                     else:
                         ypos=(nlength-m.nStart-15+last_y,nlength-m.nEnd-15+last_y)
-                    pylab.plot(xpos,ypos,".-")
+                    pylab.plot(xpos,ypos,"x-")
+                    s="%d%%" % (m.score*100.0/(m.nEnd-m.nStart))
+                    pylab.text(mean(xpos),mean(ypos),s,ha="center", va="center",bbox=dict(boxstyle="round", color="white",alpha=.5))
 
             last_y+=nlength
             pylab.plot([0,read_last_pos],[last_y,last_y],"k:")
@@ -90,54 +109,88 @@ class LRMatchesPlotter(object):
                 self.plot_matches(frm,signed_nodes,light_highlight_nodes=highlight_all,highlight_nodes=[abs(x) for x in nodes])
 
 
+class LRMatchesAnalyser(object):
+    """docstring for LRMatchesPlotter.
+    Read classitication:
+    0 - Not analysed
+    1 - """
+    def __init__(self, lorm, allowed_overlap=500):
+        self.lorm=lorm
+        self.allowed_overlap=allowed_overlap
+        self.read_class_names={
+        0: 'OK',
+        1: 'No mappings',
+        2: 'Significant overlaps',
+        10: 'Not analysed',
+        }
 
+    def classify_reads(self):
+        self.read_class = np.zeros((len(self.lorm.filtered_read_mappings),), dtype=np.int8)
+        rid=-1
+        for frm in self.lorm.filtered_read_mappings:
+            rid+=1
+            c=0
+            if not frm:
+                c=1
+            else:
+                for i in range(len(frm)-1):
+                    if frm[i].qEnd-self.allowed_overlap>frm[i+1].qStart:
+                        c=2
+                        break
+            self.read_class[rid]=c
 
+    def report_classification(self):
+        unique, counts = np.unique(self.read_class, return_counts=True)
+        for uc in zip(unique, counts):
+            print(self.read_class_names[uc[0]]," -> ",uc[1],"(%.2f%%)" % (int(uc[1])*100.0/len(self.read_class)))
 
+class LDGPlotter(object):
+    """docstring for LDGPlotter."""
+    def __init__(self, ldg):
+        self.ldg = ldg
 
+    def plot_around_nodes(self,_nodes,radius=10,min_links=1):
+        link_edges=[]
+        initialnodes=[abs(x) for x in _nodes]
+        s = Graph('structs', node_attr={'shape': 'plaintext'},engine='neato')
+        s.attr(size='15,8',ratio='fill')
+        nodes=initialnodes.copy()
+        for x in range(radius):
+            new_nodes=[]
+            for n in nodes:
+                for fnd in self.ldg.fw_neighbours_by_distance(n,min_links):
+                    if abs(fnd[1]) not in nodes: new_nodes.append(abs(fnd[1]))
+                for bnd in self.ldg.fw_neighbours_by_distance(-n,min_links):
+                    if abs(bnd[1]) not in nodes: new_nodes.append(abs(bnd[1]))
+            nodes+=new_nodes
+            if x<radius: new_nodes=[]
 
-from graphviz import Graph
-def plot_nodes_around(_nodes,ldg,radius,min_links):
-    link_edges=[]
-    initialnodes=[abs(x) for x in _nodes]
-    s = Graph('structs', node_attr={'shape': 'plaintext'},engine='neato')
-    s.attr(size='15,8',ratio='fill')
-    nodes=initialnodes.copy()
-    for x in range(radius):
-        new_nodes=[]
         for n in nodes:
-            for fnd in ldg.fw_neighbours_by_distance(n,min_links):
-                if abs(fnd[1]) not in nodes: new_nodes.append(abs(fnd[1]))
-            for bnd in ldg.fw_neighbours_by_distance(-n,min_links):
-                if abs(bnd[1]) not in nodes: new_nodes.append(abs(bnd[1]))
-        nodes+=new_nodes
-        if x<radius: new_nodes=[]
-
-    for n in nodes:
-        if n in initialnodes: nodecolor='bgcolor="yellow"'
-        elif n in new_nodes: nodecolor='bgcolor="cyan"'
-        else: nodecolor=''
-        s.node(str(n), '''<
-    <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
-      <TR>
-        <TD PORT="+" bgcolor="darkgreen"> </TD>
-        <TD %s>%d</TD>
-        <TD PORT="-" bgcolor="red"> </TD>
-      </TR>
-    </TABLE>>''' % (nodecolor,n))
-        for fnd in ldg.fw_neighbours_by_distance(n,min_links):
-            if abs(fnd[1]) in nodes and abs(fnd[1])<=abs(n):
-                v1='%d:-'%n
-                if fnd[1]>0: v2='%d:+'%fnd[1]
-                else: v2='%d:-'% -fnd[1]
-                if (v1,v2) not in link_edges and (v2,v1) not in link_edges: link_edges.append((v1,v2))
-        for bnd in ldg.fw_neighbours_by_distance(-n,min_links):
-            if abs(bnd[1]) in nodes and abs(bnd[1])<=abs(n):
-                v1='%d:+'%n
-                if bnd[1]>0: v2='%d:+'%bnd[1]
-                else: v2='%d:-'% -bnd[1]
-                if (v1,v2) not in link_edges and (v2,v1) not in link_edges: link_edges.append((v1,v2))
-    s.edges(link_edges)
-    return s
+            if n in initialnodes: nodecolor='bgcolor="yellow"'
+            elif n in new_nodes: nodecolor='bgcolor="cyan"'
+            else: nodecolor=''
+            s.node(str(n), '''<
+        <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0">
+          <TR>
+            <TD PORT="+" bgcolor="darkgreen"> </TD>
+            <TD %s>%d</TD>
+            <TD PORT="-" bgcolor="red"> </TD>
+          </TR>
+        </TABLE>>''' % (nodecolor,n))
+            for fnd in self.ldg.fw_neighbours_by_distance(n,min_links):
+                if abs(fnd[1]) in nodes and abs(fnd[1])<=abs(n):
+                    v1='%d:-'%n
+                    if fnd[1]>0: v2='%d:+'%fnd[1]
+                    else: v2='%d:-'% -fnd[1]
+                    if (v1,v2) not in link_edges and (v2,v1) not in link_edges: link_edges.append((v1,v2))
+            for bnd in self.ldg.fw_neighbours_by_distance(-n,min_links):
+                if abs(bnd[1]) in nodes and abs(bnd[1])<=abs(n):
+                    v1='%d:+'%n
+                    if bnd[1]>0: v2='%d:+'%bnd[1]
+                    else: v2='%d:-'% -bnd[1]
+                    if (v1,v2) not in link_edges and (v2,v1) not in link_edges: link_edges.append((v1,v2))
+        s.edges(link_edges)
+        return s
 
 def deselect_selfloops(u,ldg):
     for x in ldg.find_self_loops():
