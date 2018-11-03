@@ -41,8 +41,8 @@ class LRMatchesPlotter(object):
         self.fs=fs
 
     def plot_unfiltered(self,read_id,signed_nodes=False,highlight_nodes=[]):
-        self.plot_matches([x for x in self.lorm.mappings if x.read_id==read_id],signed_nodes,highlight_nodes)
-
+        self.plot_matches([x for x in self.lorm.mappings if x.read_id==read_id],signed_nodes,highlight_nodes,title="RAW matches for read %d" % read_id)
+        pylab.title
     def plot_unfiltered_in_node(self,node_id,signed_nodes=False,highlight_nodes=[]):
         reads=[]
         for x in self.lorm.mappings:
@@ -55,9 +55,9 @@ class LRMatchesPlotter(object):
 
 
     def plot(self,read_id,signed_nodes=False,highlight_nodes=[]):
-        self.plot_matches(self.lorm.filtered_read_mappings[read_id],signed_nodes,highlight_nodes)
+        self.plot_matches(self.lorm.filtered_read_mappings[read_id],signed_nodes,highlight_nodes,title="Filtered matches for read %d" % read_id)
 
-    def plot_matches(self,matches,signed_nodes=False, highlight_nodes=[],light_highlight_nodes=[]):
+    def plot_matches(self,matches,signed_nodes=False, highlight_nodes=[],light_highlight_nodes=[],title=""):
         pylab.figure(figsize=self.fs)
         last_y=0
         nodes=[]
@@ -90,7 +90,8 @@ class LRMatchesPlotter(object):
 
             last_y+=nlength
             pylab.plot([0,read_last_pos],[last_y,last_y],"k:")
-        pylab.title('Filtered matches for read %d' % matches[0].read_id)
+        if not title:title='Matches for read %d' % matches[0].read_id
+        pylab.title(title)
         pylab.xlabel('Read position')
         pylab.ylabel('Node')
         pylab.xlim(left=0,right=read_last_pos)
