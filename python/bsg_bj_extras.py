@@ -57,7 +57,7 @@ class LRMatchesPlotter(object):
     def plot(self,read_id,signed_nodes=False,highlight_nodes=[]):
         self.plot_matches(self.lorm.filtered_read_mappings[read_id],signed_nodes,highlight_nodes,title="Filtered matches for read %d" % read_id)
 
-    def plot_matches(self,matches,signed_nodes=False, highlight_nodes=[],light_highlight_nodes=[],title=""):
+    def plot_matches(self,matches,signed_nodes=False, highlight_nodes=[],light_highlight_nodes=[],title="",xlim=0):
         pylab.figure(figsize=self.fs)
         last_y=0
         nodes=[]
@@ -69,6 +69,7 @@ class LRMatchesPlotter(object):
                 if signed_nodes: nodes.append(m.node)
                 else: nodes.append(abs(m.node))
         read_last_pos=max([x.qEnd for x in matches])
+        read_last_pos=max(xlim,read_last_pos)
         for n in nodes:
             nlength=len(self.lorm.getSequenceGraph().nodes[abs(n)].sequence)
             tickpos.append(last_y+nlength/2)
@@ -407,4 +408,73 @@ def reads_to_lines(lorm,reads_in_lines):
             rtl[r].add(lrsi)
     return rtl
 
-#now check for every anchor how many reads connect to other lines!
+def kmer_to_number(seq):
+    fkmer=0
+    rkmer=0
+    i1=0
+    i2=len(seq)-1
+    for x in seq:
+        if x=='A':
+            fkmer+=0<<2*i1
+            rkmer+=3<<2*i2
+        elif x=='C':
+            fkmer+=1<<2*i1
+            rkmer+=2<<2*i2
+        elif x=='G':
+            fkmer+=2<<2*i1
+            rkmer+=1<<2*i2
+        elif x=='T':
+            fkmer+=3<<2*i1
+            rkmer+=0<<2*i2
+        else: return None
+        i1+=1
+        i2-=1
+    if fkmer<rkmer: return fkmer
+    else: return -rkmer
+
+class Nano10xDetailedAnalysis(object):
+    """uses a LinkedReadMapper to select best haplotype solution in a LongRead."""
+    def __init__(self, lirm, lorm, k):
+        super(Nano10xDetailedAnalysis, self).__init__()
+        self.lirm = lirm
+        self.lorm = lorm
+        self.k=k
+        self.blrsg=bsg.BufferedSequenceGetter(lorm.datastore,10000000,1000000)
+
+    def load_read_data(self,read_id):
+        "sets mappings, nodes and nodesets, and read_seq"
+        self.read_id=read_id
+        self.mappings=[]
+        self.nodes=set()
+        max_map_end=0
+        for i in range(len(self.lorm.mappings)):
+            if self.lorm.mappings[i].read_id>read_id: break
+            if self.lorm.mappings[i].read_id==read_id:
+                self.mappings.append(self.lorm.mappings[i])
+                self.nodes.add(abs(self.mappings[-1].node))
+                max_map_end=max(max_map_end,self.mappings[-1].qEnd)
+        print("creating all nodesets for read %d, with nodes: %s"%(read_id,self.nodes))
+        self.nodesets=set()
+        for node in self.nodes:
+            nodeset=[n.node for n in self.lirm.tag_neighbours[node] if n.score>0.05 and n.node in self.nodes]
+            nodeset.sort()
+            self.nodesets.add(tuple(nodeset))
+        self.read_seq=self.blrsg.get_read_sequence(read_id)
+
+    def plot_all_nodesets(min_cv):
+        mp=LRMatchesPlotter(self.lorm,(15,5))
+        for ns in self.nodesets:
+            nm=[m for m in self.mappings if abs(m.node) in ns]
+            if sum([m.qEnd-m.qStart for m in nm])>min_cv*max_map_end:
+                mp.plot_matches(nm,xlim=max_map_end)
+
+    def index_readwin_kmers(self, win_size, win_step):
+        self.kidx={}
+        win=0
+        for wstart in range(0,len(self.read_seq)-win_size,win_step):
+            wseq=self.read_seq[wstart:wstart+win_size]
+            for kstart in range(len(wseq)-self.k):
+                kn=abs(kmer_to_number(wseq[kstart:kstart+self.k]))
+                if kn not in self.kidx: self.kidx[kn]=set()
+                self.kidx[kn].add(win)
+            win+=1
