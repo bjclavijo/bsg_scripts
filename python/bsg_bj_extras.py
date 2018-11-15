@@ -432,10 +432,19 @@ def kmer_to_number(seq):
     if fkmer<rkmer: return fkmer
     else: return -rkmer
 
+def sequence_to_kmer_numbers(seq,k,positive=True):
+    numbers=[]
+    for kstart in range(len(seq)-k):
+        if positive:
+            numbers.append(abs(kmer_to_number(seq[kstart:kstart+k])))
+        else:
+            numbers.append(kmer_to_number(seq[kstart:kstart+k]))
+    return numbers;
 class Nano10xDetailedAnalysis(object):
     """uses a LinkedReadMapper to select best haplotype solution in a LongRead."""
-    def __init__(self, lirm, lorm, k):
+    def __init__(self, sg, lirm, lorm, k):
         super(Nano10xDetailedAnalysis, self).__init__()
+        self.sg=sg
         self.lirm = lirm
         self.lorm = lorm
         self.k=k
@@ -470,6 +479,8 @@ class Nano10xDetailedAnalysis(object):
 
     def index_readwin_kmers(self, win_size, win_step):
         self.kidx={}
+        self.win_size=win_size
+        self.win_step=win_step
         win=0
         for wstart in range(0,len(self.read_seq)-win_size,win_step):
             wseq=self.read_seq[wstart:wstart+win_size]
@@ -478,3 +489,31 @@ class Nano10xDetailedAnalysis(object):
                 if kn not in self.kidx: self.kidx[kn]=set()
                 self.kidx[kn].add(win)
             win+=1
+
+    def find_winners_per_window(self):
+        win_votes=[{} for x in range((len(self.read_seq)-self.win_size)//self.win_step+1)] #every win has a dict of nodes with their votes
+        for n in self.nodes:
+            for kn in sequence_to_kmer_numbers(self.sg.nodes[n].sequence,self.k):
+                if kn in self.kidx:
+                    for w in self.kidx[kn]:
+                        if n not in win_votes[w]: win_votes[w][n]=0
+                        win_votes[w][n]+=1
+        self.node_wins={}
+        for n in self.nodes: self.node_wins[n]=0
+        for w in range(len(win_votes)):
+            #print("\nTop 5 nodes for win #%d (%d:%d): "%(w,w*self.win_step,w*self.win_step+self.win_size-1))
+            votes=[(win_votes[w][n],n) for n in win_votes[w].keys()]
+            votes.sort(reverse=True)
+            for v in votes:
+                if v[0]<votes[0][0] or v[0]<.2*self.win_size:break
+                self.node_wins[v[1]]+=1
+            #for v in votes[:5]:
+            #    print ("%d: %d votes" % (v[1],v[0]))
+
+    def score_nodesets(self):
+        nss=[]
+        for ns in self.nodesets:
+            tvotes=sum([self.node_wins[n] for n in ns])
+            nss.append([tvotes,ns])
+        nss.sort(reverse=True)
+        return nss
