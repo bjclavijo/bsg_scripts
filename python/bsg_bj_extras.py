@@ -40,8 +40,9 @@ class LRMatchesPlotter(object):
         self.lorm=lorm
         self.fs=fs
 
-    def plot_unfiltered(self,read_id,signed_nodes=False,highlight_nodes=[]):
-        self.plot_matches([x for x in self.lorm.mappings if x.read_id==read_id],signed_nodes,highlight_nodes,title="RAW matches for read %d" % read_id)
+    def plot_unfiltered(self,read_id,signed_nodes=False,highlight_nodes=[],filter_nodes=[]):
+        m=[ x for x in self.lorm.get_raw_mappings_from_read(read_id) if not filter_nodes or abs(x.node) in filter_nodes]
+        self.plot_matches(m,signed_nodes,highlight_nodes,title="RAW matches for read %d" % read_id)
         pylab.title
     def plot_unfiltered_in_node(self,node_id,signed_nodes=False,highlight_nodes=[]):
         reads=[]
