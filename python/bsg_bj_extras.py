@@ -3,7 +3,7 @@ import pybsg as bsg
 import pylab
 from graphviz import Graph
 import numpy as np
-from statistics import mean
+from statistics import mean, median
 
 class LDGStats(object):
     """docstring for LDGStats."""
@@ -574,3 +574,81 @@ class Nano10xDetailedAnalysis(object):
             nss.append([tvotes,ns])
         nss.sort(reverse=True)
         return nss
+
+class LDGLineConsensus(object):
+    """docstring for LDGLineConsensus."""
+    def __init__(self, ldg, mldg, ws):
+        self.ldg = ldg
+        self.mldg = mldg
+        self.ws = ws
+
+    def get_lines(self,min_components=1,min_size=10000):
+        self.lines=self.ldg.get_all_lines(min_components,min_size)
+
+    def line_consensus(self, line_number):
+        line=self.lines[line_number]
+        completed_line=self.add_intermediate_nodes(line)
+        return self.consensus_from_line(completed_line)
+
+    def add_intermediate_nodes(self, line):
+        return line
+
+    def consensus_from_line(self, line):
+        #print ("generating consensus for line ",line)
+        n_stretches=0
+        direct_connections=0
+        short_indirect=0
+        s=""
+        #first node, no overlap possible to any previous
+        n=line[0]
+        if n>0:
+            s+=self.ws.sg.nodes[n].sequence
+        else:
+            rnode=bsg.Node(self.ws.sg.nodes[-n].sequence)
+            rnode.make_rc()
+            s+=rnode.sequence
+        #all other nodes, check for overlap/route to previous
+        for ni in range(1,len(line)):
+            n=line[ni]
+            pn=line[ni-1]
+            connected=False
+            mlc=[x.dist for x in self.mldg.get_fw_links(pn) if x.dest==n]
+            #first try a direct connection
+            if median(mlc)<200:
+                for fl in self.ws.sg.get_fw_links(pn):
+                    if fl.dest==n:
+                        #print("nodes %d and %d are connected on sg, distance %d !" % (pn,n,fl.dist))
+                        if fl.dist<0:
+                            s=s[:fl.dist]
+                            connected=True
+                            direct_connections+=1
+            #Now an indirect short-range connection
+            if not connected:
+                conn_paths=self.ws.sg.find_all_paths_between(pn,n,max(2*max(mlc)+2*199,500),30)
+                if len(conn_paths)==1:
+                    conn_path=conn_paths[0]
+                    #print ("found connection path between nodes %d and %d! " %(pn,n), [x for x in conn_path.nodes])
+                    ps=conn_path.get_sequence_size_fast()
+                    pd=ps-2*199#len(self.ws.sg.nodes[abs(pn)].sequence)-len(self.ws.sg.nodes[abs(n)].sequence)
+                    #print ("path size %d, estimated distance %d, %d mldg conections with median %s" %
+                    #(ps,pd,len(mlc),median(mlc)))
+                    if pd>min(median(mlc)-100,median(mlc)*.8) and pd<max(median(mlc)+100,median(mlc)*1.2):
+                        connected=True
+                        if pd<0:
+                            s=s[:pd]
+                        if pd>0:
+                            s+=conn_path.get_sequence()[199:-199]
+                        short_indirect+=1
+            if not connected:
+                n_stretches+=1
+                #s+=''.join(['N' for x in range(200)])
+                s+=''.join(['N' for x in range(max(200,int(median(mlc))))])
+            if n>0:
+                s+=self.ws.sg.nodes[n].sequence
+            else:
+                rnode=bsg.Node(self.ws.sg.nodes[-n].sequence)
+                rnode.make_rc()
+                s+=rnode.sequence
+        print("consensus includes %d direct connections, %d short patches, and %d N stretches" %
+        (direct_connections,short_indirect,n_stretches))
+        return s
