@@ -195,6 +195,62 @@ class LDGPlotter(object):
         s.edges(link_edges)
         return s
 
+    def plot_linked_space_around_node(self, node, clean_ldg=None):
+        if clean_ldg is None: clean_ldg=self.ldg
+        read_first_fconnection={}
+        for l in clean_ldg.get_fw_links(node):
+            if l.read_id not in read_first_fconnection or read_first_fconnection[l.read_id].dist<l.dist:
+                read_first_fconnection[l.read_id]=l
+        read_first_bconnection={}
+        for l in clean_ldg.get_bw_links(node):
+            if l.read_id not in read_first_bconnection or read_first_bconnection[l.read_id].dist<l.dist:
+                read_first_bconnection[l.read_id]=l
+
+        #create lists of distances for every node fw and bw and plot as histograms
+        fnodes=set([x.dest for x in read_first_fconnection.values()])
+        bnodes=set([x.dest for x in read_first_bconnection.values()])
+        fdists={}
+        bdists={}
+        for l in self.ldg.get_fw_links(node):
+            if l.dest in fnodes:
+                if l.dest not in fdists:
+                    fdists[l.dest]=[]
+                fdists[l.dest].append(l.dist)
+
+        for l in self.ldg.get_bw_links(node):
+            if l.dest in bnodes:
+                if l.dest not in bdists:
+                    bdists[l.dest]=[]
+                bdists[l.dest].append(l.dist)
+        #
+        #plot_dist_hists_from_dict(fdists)
+        self.plot_dist_hists_from_dict_as_used_space(bdists)
+        self.plot_dist_hists_from_dict_as_used_space(fdists)
+
+    def plot_dist_hists_from_dict_as_used_space(self,ddict):
+        BINSIZE=250
+        nids=list(ddict.keys())
+        nids.sort(key=lambda x:min([ddict[x]]))
+        dists=[ddict[x] for x in nids]
+        labels=["%d ( %d bp )" % (x, len(self.ldg.sg.nodes[abs(x)].sequence)) for x in nids]
+        #compute how many bins and the limits:
+        upper_limmit=(max([max(x) for x in dists])+5000)//BINSIZE*BINSIZE
+        lower_limmit=(200+BINSIZE)//BINSIZE*BINSIZE
+        bin_count=(upper_limmit-lower_limmit+1)//BINSIZE
+        occ=[]
+        for ni in nids:
+            oc=[]
+            nsize=len(self.ldg.sg.nodes[abs(ni)].sequence)
+            for d in ddict[ni]:
+                for x in range(0,nsize,BINSIZE):
+                    oc.append(d+x+BINSIZE/2)
+            occ.append(oc)
+        pylab.figure(figsize=(10,3))
+        if dists:
+            pylab.hist(occ,histtype='barstacked',label=labels,bins=bin_count,range=(lower_limmit,upper_limmit))
+        pylab.legend(bbox_to_anchor=(1.04,1), loc="upper left")
+        pylab.show()
+
 def deselect_selfloops(u,ldg):
     for x in ldg.find_self_loops():
         u.selected_nodes[abs(x)]=False
