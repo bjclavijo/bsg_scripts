@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import pybsg as bsg
 import pylab
-from graphviz import Graph
+#from graphviz import Graph
 import numpy as np
 from statistics import mean, median
 
@@ -497,6 +497,7 @@ def sequence_to_kmer_numbers(seq,k,positive=True):
         else:
             numbers.append(kmer_to_number(seq[kstart:kstart+k]))
     return numbers;
+
 class Nano10xDetailedAnalysis(object):
     """uses a LinkedReadMapper to select best haplotype solution in a LongRead."""
     def __init__(self, sg, lirm, lorm, k):
@@ -583,7 +584,10 @@ class LDGLineConsensus(object):
         self.ws = ws
 
     def get_lines(self,min_components=1,min_size=10000):
-        self.lines=self.ldg.get_all_lines(min_components,min_size)
+        s=LDGStats(self.ldg)
+        len_lines=[(s.get_line_lenght(l),l) for l in self.ldg.get_all_lines(min_components,min_size)]
+        len_lines.sort(reverse=True)
+        self.lines=[ll[1] for ll in len_lines]
 
     def line_consensus(self, line_number):
         line=self.lines[line_number]
@@ -591,9 +595,26 @@ class LDGLineConsensus(object):
         return self.consensus_from_line(completed_line)
 
     def add_intermediate_nodes(self, line):
+        for ni in range(1,len(line)):
+            n=line[ni]
+            pn=line[ni-1]
+            pn_fw=[(x[0],x[1]) for x in self.mldg.fw_neighbours_by_distance(pn,1)]
+            for i in range(len(pn_fw)):
+                if pn_fw[i][1]==n:
+                    pn_fw=pn_fw[:i+1]
+                    break
+            n_bw=[(x[0],-x[1]) for x in self.mldg.fw_neighbours_by_distance(-n,1)]
+            for i in range(len(n_bw)):
+                if n_bw[i][1]==pn:
+                    n_bw=n_bw[:i+1]
+                    break
+            print ("Finding common nodes between %d and %d"%(pn,n))
+            print (pn_fw)
+            print (n_bw)
         return line
 
     def consensus_from_line(self, line):
+        unconnected_distances=[]
         #print ("generating consensus for line ",line)
         n_stretches=0
         direct_connections=0
@@ -608,6 +629,8 @@ class LDGLineConsensus(object):
             rnode.make_rc()
             s+=rnode.sequence
         #all other nodes, check for overlap/route to previous
+        self.joined_fw=[]
+        self.dist_fw=[]
         for ni in range(1,len(line)):
             n=line[ni]
             pn=line[ni-1]
@@ -622,6 +645,8 @@ class LDGLineConsensus(object):
                             s=s[:fl.dist]
                             connected=True
                             direct_connections+=1
+                            self.joined_fw.append(True)
+                            self.dist_fw.append(fl.dist)
             #Now an indirect short-range connection
             if not connected:
                 conn_paths=self.ws.sg.find_all_paths_between(pn,n,max(2*max(mlc)+2*199,500),30)
@@ -639,10 +664,15 @@ class LDGLineConsensus(object):
                         if pd>0:
                             s+=conn_path.get_sequence()[199:-199]
                         short_indirect+=1
+                        self.joined_fw.append(True)
+                        self.dist_fw.append(pd)
             if not connected:
                 n_stretches+=1
+                unconnected_distances.append(median(mlc))
                 #s+=''.join(['N' for x in range(200)])
                 s+=''.join(['N' for x in range(max(200,int(median(mlc))))])
+                self.joined_fw.append(False)
+                self.dist_fw.append(median(mlc))
             if n>0:
                 s+=self.ws.sg.nodes[n].sequence
             else:
@@ -651,4 +681,6 @@ class LDGLineConsensus(object):
                 s+=rnode.sequence
         print("consensus includes %d direct connections, %d short patches, and %d N stretches" %
         (direct_connections,short_indirect,n_stretches))
+        unconnected_distances.sort()
+        print("Distances for unconnected neighbours: ", unconnected_distances)
         return s
