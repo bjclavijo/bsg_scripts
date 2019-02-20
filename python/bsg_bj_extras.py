@@ -684,3 +684,14 @@ class LDGLineConsensus(object):
         unconnected_distances.sort()
         print("Distances for unconnected neighbours: ", unconnected_distances)
         return s
+
+def dump_line_nodes(ws, lines, filename):
+    with open(filename,"w") as f:
+        f.write("node,size,line,position,orientation\n")
+        for li in range(len(lines)):
+            line=lines[li]
+            for ni in range(len(line)):
+                n=abs(line[ni])
+                if line[ni]<0: orientation='-'
+                else: orientation='+'
+                f.write("%d,%d,%d,%d,%s\n"%(n,len(ws.sg.nodes[n].sequence),li,ni,orientation))
