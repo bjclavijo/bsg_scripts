@@ -189,11 +189,6 @@ class LDGLineConsensus(object):
                         self.read_seqs[int(name)]=l.strip()
         else:
             self.readseqgetter=bsg.BufferedSequenceGetter(ws.long_read_datastores[0])
-        #check the reads that are in the line node
-        self.node_reads={}
-        for x in line:
-            n=abs(x)
-            self.node_reads[n]=set([int(x) for x in ws.long_read_mappers[0].reads_in_node[n]])
 
     def get_read_sequence(self,rid):
         if self.long_reads_file:
@@ -240,7 +235,9 @@ class LDGLineConsensus(object):
 
     def chop_reads_between(self,node_from,node_to, verbose=False):
         chopped_seqs=[]
-        for rid in self.node_reads[abs(node_from)].intersection(self.node_reads[abs(node_to)]):
+        node_from_reads=set([int(x) for x in self.ws.long_read_mappers[0].reads_in_node[abs(node_from)]])
+        node_to_reads=set([int(x) for x in self.ws.long_read_mappers[0].reads_in_node[abs(node_to)]])
+        for rid in node_from_reads.intersection(node_to_reads):
             rc=False
             seq=str(self.get_read_sequence(rid))
             rnodes=[m.node for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid]]
@@ -475,7 +472,7 @@ class LDGLineConsensus(object):
                 if max(votes)>len(conn_paths)*.75 and votes.count(max(votes))==1:
                     wpi=votes.index(max(votes))
                     conn_path=conn_paths[wpi]
-                    if verbose: print (" found wining connection path between nodes %d and %d! " %(pn,n), [x for x in conn_path.nodes])
+                    if verbose: print (" Found WINING connection path between nodes %d and %d! " %(pn,n), [x for x in conn_path.nodes])
                     ps=conn_path.get_sequence_size_fast()
                     pd=ps-2*199#len(self.ws.sg.nodes[abs(pn)].sequence)-len(self.ws.sg.nodes[abs(n)].sequence)
                     if verbose:
