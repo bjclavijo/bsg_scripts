@@ -188,13 +188,18 @@ class LDGLineConsensus(object):
                     else:
                         self.read_seqs[int(name)]=l.strip()
         else:
-            self.readseqgetter=BSG.BufferedSequenceGetter(ws.long_read_datastores[0])
+            self.readseqgetter=bsg.BufferedSequenceGetter(ws.long_read_datastores[0])
         #check the reads that are in the line node
         self.node_reads={}
         for x in line:
             n=abs(x)
             self.node_reads[n]=set([int(x) for x in ws.long_read_mappers[0].reads_in_node[n]])
 
+    def get_read_sequence(self,rid):
+        if self.long_reads_file:
+            return self.read_seqs[rid]
+        else:
+            return self.readseqgetter.get_read_sequence(rid)
 
     def add_connecting_nodes(self):
         new_line=[self.line[0]]
@@ -248,11 +253,8 @@ class LDGLineConsensus(object):
             else: continue
             if send<sstart: continue
             sstart=max(sstart-199,0)
-            send=min(send+199,len(self.read_seqs[rid]))
-            if len(self.read_seqs)>1:
-                seq=self.read_seqs[rid][sstart:send]
-            else:
-                seq=str(self.readseqgetter.get_read_sequence(rid))
+            seq=str(self.get_read_sequence(rid))
+            send=min(send+199,len(seq))
             if rc:
                 tn=bsg.Node(seq)
                 tn.make_rc()
