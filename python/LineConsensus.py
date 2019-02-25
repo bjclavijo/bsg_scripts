@@ -242,24 +242,33 @@ class LDGLineConsensus(object):
         chopped_seqs=[]
         for rid in self.node_reads[abs(node_from)].intersection(self.node_reads[abs(node_to)]):
             rc=False
+            seq=str(self.get_read_sequence(rid))
             rnodes=[m.node for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid]]
             if -node_from in rnodes and -node_to in rnodes: #read is reversed
-                sstart=max([m.qEnd for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid] if m.node==-node_from])
-                send=min([m.qStart for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid] if m.node==-node_to])
+                sstart=len(seq)-min([m.qStart for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid] if m.node==-node_from])
+                send=len(seq)-max([m.qEnd for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid] if m.node==-node_to])
                 rc=True
             elif node_from in rnodes and node_to in rnodes:
                 sstart=max([m.qEnd for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid] if m.node==node_from])
                 send=min([m.qStart for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid] if m.node==node_to])
             else: continue
-            if send<sstart: continue
+
+            #print ("Chopping read %d (%d bp) between nodes %d and %d" %(rid,len(seq),node_from,node_to))
+            #for m in self.ws.long_read_mappers[0].filtered_read_mappings[rid]:
+            #     if abs(m.node) in (abs(node_from), abs(node_to)):
+            #         print("  ",m)
+            # print ("  From straight matches: start=",sstart," send=",send)
+            if send<sstart:
+                # print ("aborting because of end<start")
+                continue
             sstart=max(sstart-199,0)
-            seq=str(self.get_read_sequence(rid))
             send=min(send+199,len(seq))
+            # print ("  Including extra 199 to account for overlaps: start=",sstart," send=",send)
             if rc:
                 tn=bsg.Node(seq)
                 tn.make_rc()
                 seq=tn.sequence
-            chopped_seqs.append(seq)
+            chopped_seqs.append(seq[sstart:send])
         if verbose: print('Chopped %d sequences, with sizes %s'% (len(chopped_seqs),[len(x) for x in chopped_seqs]))
         return chopped_seqs
 
