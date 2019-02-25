@@ -8,6 +8,7 @@ class ReadGraphNode(object):
         self.read_pos={}
         self.nexts=[]
         self.prevs=[]
+        self.seq_cov=0
 
 class ReadGraph(object):
     def __init__(self,k):
@@ -57,7 +58,35 @@ class ReadGraph(object):
             max_score+=1
             if seq in self.sequence_to_nodes: score+=1
         #print ("score is %d/%d"%(score,max_score))
-        return score/max_score
+        #return score#/max_score
+        return (score,-(max_score-score))
+
+    def compare_support(self,sequences):
+        for n in self.nodes: n.seq_cov=0
+        ssets=[]
+        scores=[]
+        for sequence in sequences:
+            sset=set()
+            for x in range(len(sequence)-self.k+1):
+                sset.add(sequence[x:x+self.k])
+            for seq in sset:
+                if seq in self.sequence_to_nodes: self.nodes[self.sequence_to_nodes[seq]].seq_cov+=1
+            ssets.append(sset)
+        #print("Max n.seq_cov=%d"%(max([x.seq_cov for x in self.nodes])))
+        for i in range(len(sequences)):
+            sset=ssets[i]
+            distinctive_present=0
+            missing=0
+            single=0
+            for seq in sset:
+                if seq in self.sequence_to_nodes:
+                    n=self.nodes[self.sequence_to_nodes[seq]]
+                    if n.seq_cov!=len(sequences): distinctive_present+=len(n.read_pos)#*(len(sequences)-n.seq_cov)
+                    if len(n.read_pos)==1: single+=1
+                else:
+                    missing+=1
+            scores.append((distinctive_present-missing,distinctive_present,-single,-missing))
+        return scores
 
     def extend_paths(self,sg,origin,dest,max_dist,min_coverage=.85):
         '''Recursive function, returns [[solution1, solution2, ..., solutionN] , [unfinished1, unfinished2, ..., unfinishedN] ]'''
@@ -158,15 +187,14 @@ class LDGLineConsensus(object):
                         name=l[1:]
                     else:
                         self.read_seqs[int(name)]=l.strip()
+        else:
+            self.readseqgetter=BSG.BufferedSequenceGetter(ws.long_read_datastores[0])
         #check the reads that are in the line node
         self.node_reads={}
-        for x in line: self.node_reads[abs(x)]=set()
+        for x in line:
+            n=abs(x)
+            self.node_reads[n]=set([int(x) for x in ws.long_read_mappers[0].reads_in_node[n]])
 
-        for rid in range(len(ws.long_read_mappers[0].filtered_read_mappings)):
-            for m in ws.long_read_mappers[0].filtered_read_mappings[rid]:
-                n=abs(m.node)
-                if n in self.node_reads.keys():
-                    self.node_reads[n].add(rid)
 
     def add_connecting_nodes(self):
         new_line=[self.line[0]]
@@ -205,9 +233,7 @@ class LDGLineConsensus(object):
         #print ("%d nodes added in %d/%d gaps"% (added,completed,total))
         return added
 
-    def walk_with_nanopore(self,node_from,node_to):
-        print('Walking with nanopore between %d and %d'%(node_from,node_to))
-        #get the reads, chop the appropriate regions
+    def chop_reads_between(self,node_from,node_to, verbose=False):
         chopped_seqs=[]
         for rid in self.node_reads[abs(node_from)].intersection(self.node_reads[abs(node_to)]):
             rc=False
@@ -226,19 +252,30 @@ class LDGLineConsensus(object):
             if len(self.read_seqs)>1:
                 seq=self.read_seqs[rid][sstart:send]
             else:
-                raise NotImplementedError("can't yet get sequences from datastore, sorry!")
+                seq=str(self.readseqgetter.get_read_sequence(rid))
             if rc:
                 tn=bsg.Node(seq)
                 tn.make_rc()
                 seq=tn.sequence
             chopped_seqs.append(seq)
-        print('Chopped %d sequences, with sizes %s'% (len(chopped_seqs),[len(x) for x in chopped_seqs]))
+        if verbose: print('Chopped %d sequences, with sizes %s'% (len(chopped_seqs),[len(x) for x in chopped_seqs]))
+        return chopped_seqs
+
+    def make_rg_between(self,node_from,node_to):
+        chopped_seqs=elf.chop_reads_between(node_from,node_to)
+
 
 
         #Construct a directional DBG with the nanopore data
         rg=ReadGraph(15)
         for i in range(len(chopped_seqs)): rg.add_read(chopped_seqs[i],i)
         print('graph with %d nodes created, %d nodes with coverage>1'%(len(rg.nodes),len([x for x in rg.nodes if len(x.read_pos)>1])))
+
+        return rg
+
+    def walk_with_nanopore(self,node_from,node_to):
+        print('Walking with nanopore between %d and %d'%(node_from,node_to))
+        rg=self.make_rg_between(node_from,node_to)
         #optional: try to delimit all nodes that are not anchors that are in direct connection to these nodes?
 
         # try to find a path in the graph that is coherent with the PB DDBG
@@ -295,13 +332,17 @@ class LDGLineConsensus(object):
                             nseq3=tn.sequence
                         print ("      next next next neighbour is node %d (%d bp) with score %.2f "%(fn3.dest,len(nseq3),rg.place_and_score(nseq3)))
 
-    def produce_consensus(self,join_neighbours=True,join_overlapping=True,walk_with_nanopore=True,fill_with_nanopore=True):
+    def produce_consensus(self,join_neighbours=True,join_overlapping=True,score_with_nanopore=True,fill_with_nanopore=True,verbose=False):
         #put first sequence read_first
 
         unconnected_distances=[]
         n_stretches=0
         direct_connections=0
         short_indirect=0
+        voted_indirect=0
+        nopaths=0
+        nopaths_lenght=0
+        nopaths_nodes=[]
         s=""
         #first node, no overlap possible to any previous
         n=self.line[0]
@@ -331,34 +372,38 @@ class LDGLineConsensus(object):
                 ns2=0
             connected=False
             mlc=[x.dist for x in self.mldg.get_fw_links(pn) if x.dest==n]
-            print("\nJoining nodes %d (%d bp) and %d (%d bp), neighbour scores %.3f, %.3f" %
-                (pn,len(self.ws.sg.nodes[abs(pn)].sequence),n,len(self.ws.sg.nodes[abs(n)].sequence),ns1,ns2))
+            if verbose: print("\nJoining nodes %d (%d bp) and %d (%d bp), neighbour scores %.3f, %.3f, %d mldg conections with median %s" % (pn,len(self.ws.sg.nodes[abs(pn)].sequence),n,len(self.ws.sg.nodes[abs(n)].sequence),ns1,ns2,len(mlc),median(mlc)))
             #HEURISTIC #1: direct connection on SG
 
             if join_neighbours and mlc and median(mlc)<200:
                 for fl in self.ws.sg.get_fw_links(pn):
                     if fl.dest==n:
-                        #print("nodes %d and %d are connected on sg, distance %d !" % (pn,n,fl.dist))
+                        if verbose: print(" nodes %d and %d are connected on sg, distance %d !" % (pn,n,fl.dist))
                         if fl.dist<0:
                             s=s[:fl.dist] #distance is negative, so overlap is removed
                             connected=True
                             direct_connections+=1
                             self.joined_fw.append(True)
                             self.dist_fw.append(fl.dist)
-                            print ("Gap joined on SG direct neighbours!")
+                            if verbose: print (" Gap joined on SG direct neighbours!")
 
             #HEURISTIC #2: indirect overlapping connection on SG
 
             #Now an indirect short-range connection
             if join_overlapping and not connected and mlc:
-                conn_paths=self.ws.sg.find_all_paths_between(pn,n,0,30)
+                conn_paths=self.ws.sg.find_all_paths_between(pn,n,max(int(max(mlc)*1.5),2000),30,False)
+                if verbose: print (" There are %d connecting paths in the SG"%len(conn_paths))
+                if len(conn_paths)==0:
+                    nopaths+=1
+                    nopaths_lenght+=median(mlc)
+                    nopaths_nodes.append([pn,n,median(mlc)])
                 if len(conn_paths)==1:
                     conn_path=conn_paths[0]
-                    #print ("found connection path between nodes %d and %d! " %(pn,n), [x for x in conn_path.nodes])
+                    if verbose: print (" found ONLY ONE connection path between nodes %d and %d! " %(pn,n), [x for x in conn_path.nodes])
                     ps=conn_path.get_sequence_size_fast()
                     pd=ps-2*199#len(self.ws.sg.nodes[abs(pn)].sequence)-len(self.ws.sg.nodes[abs(n)].sequence)
-                    #print ("path size %d, estimated distance %d, %d mldg conections with median %s" %
-                    #(ps,pd,len(mlc),median(mlc)))
+                    if verbose:
+                        print (" path size %d (gap %d)" % (ps,pd))
                     if pd>min(median(mlc)-100,median(mlc)*.8) and pd<max(median(mlc)+100,median(mlc)*1.2):
                         connected=True
                         if pd<0:
@@ -368,11 +413,72 @@ class LDGLineConsensus(object):
                         short_indirect+=1
                         self.joined_fw.append(True)
                         self.dist_fw.append(pd)
-                        print ("Gap joined on SG short indirect connection!")
+                        if verbose: print (" Gap joined on SG short indirect connection!")
             #HEURISTIC #3: path on SG supported by nanopore reads
 
-            if walk_with_nanopore and not connected:
-                a=self.walk_with_nanopore(pn,n)
+            #if walk_with_nanopore and not connected:
+            #    a=self.walk_with_nanopore(pn,n)
+
+            # if score_with_nanopore and not connected:
+            #     scored_paths=[]
+            #     rg=self.make_rg_between(pn,n)
+            #     scores=rg.compare_support([p.get_sequence()[199:-199] for p in conn_paths])
+            #     for i in range(len(conn_paths)):
+            #         p=conn_paths[i]
+            #         score=scores[i]
+            #         seq=p.get_sequence()[199:-199]
+            #         scored_paths.append((score,len(seq)))#,[x for x in p.nodes]))
+            #     scored_paths.sort(reverse=True)
+            #     if len(scored_paths)>10:
+            #         print ("%d paths scored, showing only top 10:"%(len(scored_paths)))
+            #     for sp in scored_paths[:10]:
+            #         print(sp)
+            if score_with_nanopore and len(conn_paths) and not connected:
+                if verbose: print("\n\n")
+                scored_paths=[]
+                rn=1
+                votes=[0 for x in conn_paths]
+                for cseq in self.chop_reads_between(pn,n,verbose):
+                    if verbose: print ("Voting with read chop #",rn,": ",end="")
+                    rg=ReadGraph(11)
+                    rg.add_read(cseq,0)
+                    scores=[]
+                    penalties=[]
+                    for i in range(len(conn_paths)):
+                        p=conn_paths[i]
+                        pas=rg.place_and_score(p.get_sequence())
+                        scores.append(pas[0])
+                        penalties.append(pas[1])
+                    if verbose: print(scores)
+                    maxs=max(scores)
+                    for i in range(len(scores)):
+                        if scores[i]==maxs:
+                            votes[i]+=1
+                    # maxpen=max(penalties)
+                    # for i in range(len(penalties)):
+                    #     if penalties[i]==maxpen:
+                    #         votes[i]+=1
+                    rn+=1
+                if verbose: print ("Final votes : ",votes)
+                if verbose: print ("Path lengths: ",[len(p.get_sequence()) for p in conn_paths])
+                if max(votes)>len(conn_paths)*.75 and votes.count(max(votes))==1:
+                    wpi=votes.index(max(votes))
+                    conn_path=conn_paths[wpi]
+                    if verbose: print (" found wining connection path between nodes %d and %d! " %(pn,n), [x for x in conn_path.nodes])
+                    ps=conn_path.get_sequence_size_fast()
+                    pd=ps-2*199#len(self.ws.sg.nodes[abs(pn)].sequence)-len(self.ws.sg.nodes[abs(n)].sequence)
+                    if verbose:
+                        print (" path size %d (gap %d)" % (ps,pd))
+                    if pd>min(median(mlc)-100,median(mlc)*.8) and pd<max(median(mlc)+100,median(mlc)*1.2):
+                        connected=True
+                        if pd<0:
+                            s=s[:pd]
+                        if pd>0:
+                            s+=conn_path.get_sequence()[199:-199]
+                        voted_indirect+=1
+                        self.joined_fw.append(True)
+                        self.dist_fw.append(pd)
+                        if verbose: print (" Gap joined on voted indirect connection!")
 
             #HEURISTIC #4: path on SG supported by nanopore reads
 
@@ -399,5 +505,9 @@ class LDGLineConsensus(object):
         #print("consensus includes %d direct connections, %d short patches, and %d N stretches" %
         #(direct_connections,short_indirect,n_stretches))
         #unconnected_distances.sort()
-        #print("Distances for unconnected neighbours: ", unconnected_distances)
+        if verbose:
+            print("Distances for unconnected neighbours: ", unconnected_distances)
+            print("Gaps with no paths: %d (%d bp)" % (nopaths,nopaths_lenght))
+            for x in nopaths_nodes:
+                print ("%d -> %d (%d), seq%d,seq%d"%(x[0],x[1],x[2],abs(x[0]),abs(x[1])))
         return s
